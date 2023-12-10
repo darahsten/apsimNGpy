@@ -102,19 +102,17 @@ def _read_simulation(datastore, report_name=None):
         return dataframe_dict
 
 
-def run(named_tuple_data, clean=False, multithread=True, read_db=False):
+def run(named_tuple_data, clean=False, multi_thread=True, read_db=False):
     """Run apsimx model in the simulations
 
         Parameters
         ----------
         simulations (__str_), optional
             List of simulation names to run, if `None` runs all simulations, by default `None`.
-        clean (_-boolean_), optional
-            If `True` remove existing database for the file before running, deafults to False`
-        multithread, optional
-            If `True` APSIM uses multiple threads, by default `True`
+        clean (_-boolean_): If `True` remove existing database for the file before running, defaults to False`
+        multi_thread: If `True` APSIM uses multiple threads, by default `True`
         """
-    if multithread:
+    if multi_thread:
         runtype = Models.Core.Run.Runner.RunTypeEnum.MultiThreaded
     else:
         runtype = Models.Core.Run.Runner.RunTypeEnum.SingleThreaded

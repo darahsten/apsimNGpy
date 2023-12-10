@@ -24,16 +24,17 @@ import APSIM
 maize = LoadExampleFiles(Path.home())
 APSIM.Server.ApsimServer  # statrt again from here
 # decorator to monitor performance
-serv = APSIM.Server.Cli.GlobalServerOptions()
-serv.KeepAlive = False
-serv.Verbose = True
-serv.File = maize.get_maize
-serv.Verbose = True
-serv.NativeMode = True
-serv.LocalMode = True
-serv.SocketName = 'maga'
-ac = APSIM.Server.ApsimServer(serv)
+server = APSIM.Server.Cli.GlobalServerOptions()
+server.KeepAlive = False
+server.Verbose = True
+server.File = maize.get_maize
+server.Verbose = True
+server.NativeMode = True
+server.LocalMode = True
+server.SocketName = 'maga'
+ac = APSIM.Server.ApsimServer(server)
 from ctypes import c_int32, sizeof, c_double, c_char, c_int64
+
 
 class ApsimClient:
     ACK = 'ACK'
@@ -58,7 +59,6 @@ class ApsimClient:
         self.ip_address = ip_address
         self.port = port
 
-
     def connect_to_remote_server(self):
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -66,7 +66,6 @@ class ApsimClient:
             return client
         except ConnectionRefusedError as e:
            print("connection denied-----------/")
-
 
     def _disconnect_from_server(self, socket):
         socket.close()
@@ -232,6 +231,7 @@ class ApsimClient:
         print(stdout.decode())
         print(stderr.decode())
         return stderr, stdout
+
 
 if __name__ == '__main__':
     # Example usage:

@@ -1,23 +1,53 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
-import glob, os, sys
 from time import perf_counter
 from tqdm import tqdm
 from multiprocessing import cpu_count
-from os.path import dirname
-from os.path import join as opj
-from apsimNGpy.utililies.utils import timer
-from apsimNGpy.utililies.run_utils import run_model, read_simulation
-from apsimNGpy.manager.soilmanager import DownloadsurgoSoiltables, OrganizeAPSIMsoil_profile
+from apsimNGpy.utils.run import run_model, read_simulation
+from core.soils import download_surgo_soil_tables, APSIMSoilProfile
 
 
-# _______________________________________________________________
-def run_apsimxfiles_in_parallel(iterable_files, ncores=None, use_threads=False):
+def run_in_parallel(func, apsim_files, num_cores=None, use_threads=False, bar_format="", **kwargs):
+    """
+    Args:
+    - apsim_files (list): A list of APSIMX  files to be run in parallel.
+    - num_cores (int, optional): The number of CPU cores or threads to use for parallel processing. If not provided,
+    it defaults to 50% of available CPU cores.
+    - use_threads (bool, optional): If set to True, the function uses thread pool execution; otherwise, it uses process
+    pool execution. Default is False.
+    bar_format: A string format use to update the progress bar with the progress.
+
+    Returns:
+    - returns a generator object containing the path to the datastore or sql databases
+
+    """
+    files = set(apsim_files)
+    num_cores_2_use = num_cores if num_cores else int(cpu_count() * 0.5)
+    a = perf_counter()
+    bar_format = bar_format or "Running apsimx files: {percentage:3.0f}% completed"
+    extra_args = kwargs.get('args')
+
+    PoolExecutor = ThreadPoolExecutor if use_threads else ProcessPoolExecutor
+    with PoolExecutor(num_cores_2_use) as pool:
+        if not extra_args:
+            futures = [pool.submit(func, file) for file in files]
+        else:
+            futures = [pool.submit(func, file, *extra_args) for file in files]
+        progress = tqdm(total=len(futures), position=0, leave=True,
+                        bar_format=bar_format)
+        for future in as_completed(futures):
+            yield future.result()
+            progress.update(1)
+        progress.close()
+    print(perf_counter() - a, 'seconds', f'to run {len(files)} files')
+
+
+def run_apsimx_files_in_parallel(apsim_files, num_cores=None, use_threads=False):
     """
     Run APSIMX simulation from multiple files in parallel.
 
     Args:
-    - iterable_files (list): A list of APSIMX  files to be run in parallel.
-    - ncores (int, optional): The number of CPU cores or threads to use for parallel processing. If not provided, it defaults to 50% of available CPU cores.
+    - apsim_files (list): A list of APSIMX  files to be run in parallel.
+    - num_cores (int, optional): The number of CPU cores or threads to use for parallel processing. If not provided, it defaults to 50% of available CPU cores.
     - use_threads (bool, optional): If set to True, the function uses thread pool execution; otherwise, it uses process pool execution. Default is False.
 
     Returns:
@@ -31,7 +61,7 @@ def run_apsimxfiles_in_parallel(iterable_files, ncores=None, use_threads=False):
     simulation_files = ["file1.apsimx", "file2.apsimx", ...]  # Replace with actual database file names
 
     # Using processes for parallel execution
-    result_generator = run_apsimxfiles_in_parallel(simulation_files, ncores=4, use_threads=False)
+    result_generator = run_apsimx_files_in_parallel(simulation_files, num_cores=4, use_threads=False)
     ```
 
     Notes:
@@ -42,37 +72,10 @@ def run_apsimxfiles_in_parallel(iterable_files, ncores=None, use_threads=False):
     - Handle any exceptions that may occur during execution for robust processing.
     """
     # remove duplicates. because duplicates will be susceptible to race conditioning in paralell computing
-    files = set(iterable_files)
-    if ncores:
-        ncore2use = ncores
-    else:
-        ncore2use = int(cpu_count() * 0.50)
-    if not use_threads:
-        a = perf_counter()
-        with ProcessPoolExecutor(ncore2use) as pool:
-            futures = [pool.submit(run_model, i) for i in files]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format='Running apsimx files: {percentage:3.0f}% completed')
-            for future in as_completed(futures):
-                yield future.result()
-                progress.update(1)
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to run {len(files)} files')
-    else:
-        a = perf_counter()
-        with ThreadPoolExecutor(ncore2use) as tpool:
-            futures = [tpool.submit(run_model, i) for i in files]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format='Running apsimx files: {percentage:3.0f}% completed')
-            # Iterate over the futures as they complete
-            for future in as_completed(futures):
-                yield future.result()  # use the generated object in the fucntion below
-                progress.update(1)
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to run {len(files)} files')
+    run_in_parallel(run_model, apsim_files, num_cores=num_cores, use_threads=use_threads)
 
 
-def read_result_in_parallel(iterable_files, ncores=None, use_threads=False, report_name="Report"):
+def read_result_in_parallel(apsim_result_files, num_cores=None, use_threads=False, report_name="Report"):
     """
 
     Read APSIMX simulation databases results from multiple files in parallel.
@@ -111,38 +114,12 @@ def read_result_in_parallel(iterable_files, ncores=None, use_threads=False, repo
     """
 
     # remove duplicates. because duplicates will be susceptible to race conditioning in paralell computing
-    files = set(iterable_files)
-    if ncores:
-        ncore2use = ncores
-    else:
-        ncore2use = int(cpu_count() * 0.50)
-    if not use_threads:
-        a = perf_counter()
-        with ProcessPoolExecutor(ncore2use) as pool:
-            futures = [pool.submit(read_simulation, i, report_name) for i in files]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format='reading file databases: {percentage:3.0f}% completed')
-            # Iterate over the futures as they complete
-            for future in as_completed(futures):
-                data = future.result()
-                # retrieve and store it in a generator
-                progress.update(1)
-                yield data
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to read {len(files)} apsimx files databases')
-    else:
-        a = perf_counter()
-        with ThreadPoolExecutor(ncore2use) as tpool:
-            futures = [tpool.submit(read_simulation, i, report_name) for i in files]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format='reading file databases: {percentage:3.0f}% completed')
-            # Iterate over the futures as they complete
-            for future in as_completed(futures):
-                data = future.result()  # retrieve and store it in a generator
-                progress.update(1)
-                yield data
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to read {len(files)} apsimx database files')
+    files = set(apsim_result_files)
+    bar_format = "Reading file databases: {percentage:3.0f}% completed"
+    extra_args = {"args": ["Report"]}
+    run_in_parallel(
+        read_simulation, files, num_cores=num_cores, use_threads=use_threads,
+        bar_format=bar_format, **extra_args)
 
 
 def download_soil_tables(iterable, use_threads=False, ncores=None, soil_series=None):
@@ -186,9 +163,9 @@ def download_soil_tables(iterable, use_threads=False, ncores=None, soil_series=N
     def _concat(x):
         try:
             cod = iterable[x]
-            table = DownloadsurgoSoiltables(cod)
+            table = download_surgo_soil_tables(cod)
             th = [150, 150, 200, 200, 200, 250, 300, 300, 400, 500]
-            sp = OrganizeAPSIMsoil_profile(table, thickness=20, thickness_values=th).cal_missingFromSurgo()
+            sp = APSIMSoilProfile(table, thickness=20, thickness_values=th).cal_missingFromSurgo()
             return {x: sp}
         except Exception as e:
             print("Exception Type:", type(e), "has occured")
@@ -219,51 +196,9 @@ def download_soil_tables(iterable, use_threads=False, ncores=None, soil_series=N
             progress.close()
 
 
-def custom_parallel(func, iterable, use_thread=False, ncores=6, *arg):
-    """
-    Run a function in parallel using threads.
-
-    Args:
-        func (callable): The function to run in parallel.
-        iterable (iterable): An iterable of items that will be processed by the function.
-        use_thread (bool, optional): If True, use threads for parallel execution; if False, use processes. Default is False.
-        ncores (int, optional): The number of threads or processes to use for parallel execution. Default is 6.
-        *args: Additional arguments to pass to the `func` function.
-
-    Yields:
-        Any: The results of the `func` function for each item in the iterable.
-
-    """
-    print(*arg)
-    if use_thread:
-        a = perf_counter()
-        with ThreadPoolExecutor(max_workers=ncores) as ppool:
-            futures = [ppool.submit(func, i, *arg) for i in iterable]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format=f'Running {func.__name__}:' '{percentage:3.0f}% completed')
-            # Iterate over the futures as they complete
-            for future in as_completed(futures):
-                yield future.result()
-                progress.update(1)
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to run {len(iterable)} files')
-    else:
-        a = perf_counter()
-        with ProcessPoolExecutor(max_workers=ncores) as ppool:
-            futures = [ppool.submit(func, i, *arg) for i in iterable]
-            progress = tqdm(total=len(futures), position=0, leave=True,
-                            bar_format=f'Running {func.__name__}:' '{percentage:3.0f}% completed')
-            # Iterate over the futures as they complete
-            for future in as_completed(futures):
-                yield future.result()
-                progress.update(1)
-            progress.close()
-        print(perf_counter() - a, 'seconds', f'to run {len(iterable)} files')
-
-
 if __name__ == '__main__':
     def fn(x, p):
-        return 1 * x +p
+        return 1 * x + p
 
-    lm = custom_parallel(fn, range(100000), True, 6, 5)
+    lm = run_in_parallel(fn, range(100000), True, 6, 5)
     pm = list(lm)

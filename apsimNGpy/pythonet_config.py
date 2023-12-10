@@ -8,7 +8,7 @@ from os.path import realpath
 from dataclasses import dataclass
 import pythonnet
 
-from apsimNGpy.utililies.utils import timer
+from apsimNGpy.utils.utils import timer
 
 
 def _is_runtime(self):

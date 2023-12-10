@@ -5,53 +5,35 @@ email: magalarich20@gmail.com
 
 """
 import matplotlib.pyplot as plt
-import random, logging, pathlib
+import random, pathlib
 import string
-from typing import Union
-import os, sys, datetime, shutil
+from typing import Union, List
+import os, datetime, shutil
 import numpy as np
 import pandas as pd
 from os.path import join as opj
 import sqlite3
 import json
-from pathlib import Path
-import threading
-import time
-import apsimNGpy.manager.weathermanager as weather
+
+import weather.weathermanager as weather
 from functools import cache
 # prepare for the C# import
-from apsimNGpy.core.pythonet_config import LoadPythonnet
 
-#py_config = LoadPythonnet()()  # double brackets avoids calling it twice
+# py_config = LoadPythonnet()()  # double brackets avoids calling it twice
 
 # now we can safely import C# libraries
 from System.Collections.Generic import *
-from Models.Core import Simulations, ScriptCompiler
+from Models.Core import Simulations
 from System import *
 from Models.Core.ApsimFile import FileFormat
 from Models.Climate import Weather
 from Models.Soils import Soil, Physical, SoilCrop, Organic
 import Models
-from Models.PMF import Cultivar
+
+from utils.utils import timing_decorator
 
 
-# from settings import * This file is not ready and i wanted to do some test
-
-
-# decorator to monitor performance
-def timing_decorator(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.perf_counter()
-        result = func(*args, **kwargs)
-        end_time = time.perf_counter()
-        elapsed_time = end_time - start_time
-        print(f"{func.__name__} took {elapsed_time:.4f} seconds to execute.")
-        return result
-
-    return wrapper
-
-
-class APSIMNG():
+class APSIMNG:
     """Modify and run Apsim next generation simulation models."""
 
     def __init__(self, model: Union[str, Simulations], copy=True, out_path=None, read_from_string=True):
@@ -108,12 +90,6 @@ class APSIMNG():
             self.datastore = self.Model.FindChild[Models.Storage.DataStore]().FileName
             self._DataStore = self.Model.FindChild[Models.Storage.DataStore]()
 
-    @staticmethod
-    def generate_unique_name(base_name, length=6):
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=length))
-        unique_name = base_name + '_' + random_suffix
-        return unique_name
-
     @property
     def filename(self):
         self.file_name = os.path.basename(self.path)
@@ -153,7 +129,7 @@ class APSIMNG():
                 self.Model = self.Model.get_NewModel()
 
         except PermissionError as e:
-              # this error will be logged to the folder logs in the current working directory
+            # this error will be logged to the folder logs in the current working directory
             print('file is being used by another process')
             raise
 
@@ -220,22 +196,20 @@ class APSIMNG():
             f.write(json)
 
     @timing_decorator
-    def run(self, simulations=None, clean=False, multithread=True):
+    def run(self, simulations: List[str] = None, clean: bool = False, multithread: bool = True):
         """Run apsim model in the simulations
 
         Parameters
         ----------
-        simulations (__str_), optional
+        simulations: str, optional
             List of simulation names to run, if `None` runs all simulations, by default `None`.
-        clean (_-boolean_), optional
-            If `True` remove existing database for the file before running, deafults to False`
-        multithread, optional
-            If `True` APSIM uses multiple threads, by default `True`
+        clean: boolean, If `True` remove existing database for the file before running, deafults to False`
+        multithread: If `True` APSIM uses multiple threads, by default `True`
         """
         if multithread:
-            runtype = Models.Core.Run.Runner.RunTypeEnum.MultiThreaded
+            run_mode = Models.Core.Run.Runner.RunTypeEnum.MultiThreaded
         else:
-            runtype = Models.Core.Run.Runner.RunTypeEnum.SingleThreaded
+            run_mode = Models.Core.Run.Runner.RunTypeEnum.SingleThreaded
 
         # Clear old data before running
         self.results = None
@@ -245,22 +219,20 @@ class APSIMNG():
             self._DataStore.Open()
 
         if simulations is None:
-            runmodel = Models.Core.Run.Runner(self.Model, True, False, False, None, runtype)
-            e = runmodel.Run()
+            simulation_model = Models.Core.Run.Runner(self.Model, True, False, False, None, run_mode)
+            simulation_result = simulation_model.Run()
         else:
             sims = self.find_simulations(simulations)
             # Runner needs C# list
             cs_sims = List[Models.Core.Simulation]()
             for s in sims:
-                cs_sims.Add(s)
-                runmodel = Models.Core.Run.Runner(cs_sims, True, False, False, None, runtype)
-                e = runmodel.Run()
+                cs_sims.Add(s)  # why are we incrementally running this model.
+                simulation_model = Models.Core.Run.Runner(cs_sims, True, False, False, None, run_mode)
+                simulation_result = simulation_model.Run()
 
-        if (len(e) > 0):
-            print(e[0].ToString())
+        if len(simulation_result) > 0:
+            print(simulation_result[0].ToString())
         self.results = self._read_simulation()
-        # print(self.results)
-
 
     def clone_simulation(self, target, simulation=None):
         """Clone a simulation and add it to Model
@@ -370,6 +342,7 @@ class APSIMNG():
                     table_list.remove(i)
                 # start selecting tables
             return table_list
+
     @staticmethod
     def read_apsimx_db(datastore, report_name=None):
         '''
@@ -597,16 +570,11 @@ class APSIMNG():
 
         return result
 
-    @staticmethod
-    def generate_unique_name(base_name, length=6):
-        random_suffix = ''.join(random.choices(string.ascii_lowercase, k=length))
-        unique_name = base_name + '_' + random_suffix
-        return unique_name
-
-    # clone apsimx file by generating unquie name
     def copy_apsim_file(self):
+        # clone apsimx file by generating unquie name
         path = os.getcwd()
-        file_path = opj(path, self.generate_unique_name("clones")) + ".apsimx"
+        random_id = "".join(random.choices(string.ascii_lowercase, k=6))
+        file_path = opj(path, f"clones_{random_id}") + ".apsimx"
         shutil.copy(self.path, file_path)
 
     def summarize_output_variable(self, var_name, table_name='Report'):
@@ -753,39 +721,34 @@ class APSIMNG():
 
         return self
 
-    def update_management_decissions(self, management, simulations=None, reload=True):
-        """Update management, handles multiple managers in a loop
+    def update_management_decisions(self, mgt_params, simulations=None, reload=True):
+        """
+        Update management, handles multiple managers in a loop
 
         Parameters
         ----------
-        management: a list of dictionaries of management paramaters or a dictionary with keyvarlue pairs of parameters and associated values, respectivelyto update. examine_management_info` to see current values.
+        mgt_params: a list of dictionaries of management parameters or a dictionary with key value pairs of parameters
+        and associated values, respectively to update. examine_management_info` to see current values.
         make a dictionary with 'Name' as the for the of  management script
-        simulations, optional
-            List of simulation names to update, if `None` update all simulations not recommended.
-        reload, optional
-            _description_ defaults to True
+        simulations: List of simulation names to update, if `None` update all simulations not recommended.
+        reload: description_ defaults to True
         """
-        if not isinstance(management, list):
-            management = [management]
+        if not isinstance(mgt_params, list):
+            mgt_params = [mgt_params]
         # from apsimx.utils import KeyValuePair
         for sim in self.find_simulations(simulations):
             zone = sim.FindChild[Models.Core.Zone]()
             atn = []
             for action in zone.FindAllChildren[Models.Manager]():
-                for managementt in management:
-                    if action.Name == managementt["Name"]:
-                        values = managementt
+                for param in mgt_params:
+                    if action.Name == param["Name"]:
+                        values = param
                         for i in range(len(action.Parameters)):
                             param = action.Parameters[i].Key
 
                             if param in values:
                                 fvalue = f"{values[param]}"
                                 action.Parameters[i] = KeyValuePair[String, String](param, fvalue)
-
-
-
-
-
 
                                 # action.Parameters[i]= {param:f"{values[param]}"}
         # self.examine_management_info()                # action.GetParametersFromScriptModel()
@@ -822,16 +785,14 @@ class APSIMNG():
                     if param in values.keys():
                         fp.Value.Parameters[i] = KeyValuePair[String, String](param, f"{values[param]}")
 
-
-
-        #return zone  # for mgt in management:
-            #     action_path = f'{zone_path}.{mgt.get("Name")}'
-            #     fp = zone.FindByPath(action_path)
-            #     values = mgt
-            #     for i in range(len(fp.Value.Parameters)):
-            #         param = fp.Value.Parameters[i].Key
-            #         if param in values.keys():
-            #             fp.Value.Parameters[i] = KeyValuePair[String, String](param, f"{values[param]}")
+        # return zone  # for mgt in management:
+        #     action_path = f'{zone_path}.{mgt.get("Name")}'
+        #     fp = zone.FindByPath(action_path)
+        #     values = mgt
+        #     for i in range(len(fp.Value.Parameters)):
+        #         param = fp.Value.Parameters[i].Key
+        #         if param in values.keys():
+        #             fp.Value.Parameters[i] = KeyValuePair[String, String](param, f"{values[param]}")
         self.save_edited_file()
         self.load_apsimx_from_string(self.path)
         return sim
@@ -866,7 +827,6 @@ class APSIMNG():
                     params = self._kvtodict(action.Parameters)
                     return params
 
-    import datetime
     @staticmethod
     def strip_time(date_string):
         date_object = datetime.datetime.strptime(date_string, "%Y-%m-%d")
@@ -1389,7 +1349,7 @@ class APSIMNG():
     @timing_decorator
     # this method will attempt to bring evrythign to memory. where we copy from one file and simulate multiple files without rizig permission errors
     def from_string(path, fn):
-        from apsimNGpy.utililies.run_utils import _read_simulation
+        from apsimNGpy.utils.run import _read_simulation
         path = os.path.realpath(path)
         try:
             with open(path, "r+") as apsimx:
@@ -1421,24 +1381,6 @@ class APSIMNG():
             raise Exception(f'{type(e)}: occured')
 
 
-# ap = dat.GetDataUsingSql("SELECT * FROM [MaizeR]")
-class ApsiMet(APSIMNG):
-    def __init__(self, model: Union[str, Simulations], copy=True, out_path=None, lonlat=None, simulation_names=None):
-        super().__init__(model, copy, out_path)
-        self.lonlat = lonlat
-        self.simulation_names = simulation_names
-
-    def insertweather_file(self):
-        start, end = self.extract_start_end_years()
-        wp = weather.daymet_bylocation(self.lonlat, start=start, end=end)
-        wp = os.path.join(os.getcwd(), wp)
-        if self.simulation_names:
-            sim_name = list(self.simulation_names)
-        else:
-            sim_name = self.extract_simulation_name  # because it is a property decorator
-        self.replace_met_file(wp, sim_name)
-
-
 if __name__ == '__main__':
     # test
     from pathlib import Path
@@ -1459,7 +1401,7 @@ if __name__ == '__main__':
     for i in [0.5, 0.0, 0.1, 1]:
         # model = APSIMNG(al.get_maize, read_from_string=False)
         pm = {'Name': 'PostharvestillageMaize', "Fraction": i}
-        model.update_management_decissions(
+        model.update_management_decisions(
             [pm, pt, pl], simulations=model.extract_simulation_name)
         lm = model
         # model.examine_management_info()
@@ -1470,9 +1412,5 @@ if __name__ == '__main__':
         print(xp)
     pm = model.check_som()
     pt = model.update_mgt(pl)
-
-
-
-
 
     path = r'C:\Users\rmagala\OneDrive\ApsimX'

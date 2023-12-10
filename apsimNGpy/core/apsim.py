@@ -3,13 +3,11 @@ Interface to APSIM simulation models using Python.NET
 author: Richard Magala
 email: magalarich20@gmail.com
 """
-import logging, pathlib
 from typing import Union
 import os
 import numpy as np
-import time
-import apsimNGpy.manager.weathermanager as weather
-from apsimNGpy.manager.soilmanager import DownloadsurgoSoiltables, OrganizeAPSIMsoil_profile
+import weather.weathermanager as weather
+from core.soils import download_surgo_soil_tables, APSIMSoilProfile
 
 # prepare for the C# import
 from apsimNGpy.core.pythonet_config import LoadPythonnet
@@ -20,35 +18,26 @@ py_config = LoadPythonnet()()
 from System.Collections.Generic import *
 from Models.Core import Simulations
 from System import *
-from Models.Soils import Solute, Water, Chemical
-from Models.Soils import Soil, Physical, SoilCrop, Organic
+from Models.Soils import Water, Chemical
+from Models.Soils import Physical, SoilCrop, Organic
 import Models
 
-from apsimNGpy.core.core import APSIMNG
+from .core import APSIMNG
 
 # constants
-REPORT_PATH = {'Carbon': '[Soil].Nutrient.TotalC/1000 as dyn', 'DUL': '[Soil].SoilWater.PAW as paw', 'N03':
-    '[Soil].Nutrient.NO3.ppm as N03'}
-
-
-# decorator to monitor performance
-def timing_decorator(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.perf_counter()
-        result = func(*args, **kwargs)
-        end_time = time.perf_counter()
-        elapsed_time = end_time - start_time
-        print(f"{func.__name__} took {elapsed_time:.4f} seconds to execute.")
-        return result
-
-    return wrapper
+REPORT_PATH = {
+    'Carbon': '[Soil].Nutrient.TotalC/1000 as dyn',
+    'DUL': '[Soil].SoilWater.PAW as paw',
+    'N03': '[Soil].Nutrient.NO3.ppm as N03'
+}
 
 
 class ApsimModel(APSIMNG):
-    def __init__(self, model: Union[str, Simulations], copy: bool = False, out_path: str = None, read_from_string=True,
-                 lonlat=None,
-                 soil_series: str = 'domtcp', thickness: int = 20, bottomdepth: int = 200,
-                 thickness_values: list = None, run_all_soils: bool = False):
+    def __init__(
+            self, model: Union[str, Simulations], copy: bool = False, out_path: str = None,
+            read_from_string=True, lonlat=None, soil_series: str = 'domtcp', thickness: int = 20,
+            bottomdepth: int = 200, thickness_values: list = None, run_all_soils: bool = False
+    ):
         super().__init__(model, read_from_string)
         """get suurgo soil tables and organise it to apsim soil profiles
         --------------------
@@ -120,17 +109,17 @@ class ApsimModel(APSIMNG):
         self.lonlat = lonlat
         self.dict_of_soils_tables = {}
         if not self.run_all_soils:
-            self.soil_tables = DownloadsurgoSoiltables(self.lonlat, select_componentname=self.soil_series)
-            for ss in self.soil_tables.componentname.unique():
+            self.soil_tables = download_surgo_soil_tables(self.lonlat, select_component_name=self.soil_series)
+            for ss in self.soil_tables.component_name.unique():
                 self.dict_of_soils_tables[ss] = self.soil_tables[self.soil_tables['componentname'] == ss]
 
         if self.run_all_soils:
             self.dict_of_soils_tables = {}
-            self.soil_tables = DownloadsurgoSoiltables(self.lonlat)
+            self.soil_tables = download_surgo_soil_tables(self.lonlat)
 
             self.percent = self.soil_tables.prcent.unique()
             # create a dictionary of soil series
-            self.unique_soil_series = self.soil_tables.componentname.unique()
+            self.unique_soil_series = self.soil_tables.component_name.unique()
 
             new_col = []
             for i in range(len(self.soil_tables['chkey'])):
@@ -139,7 +128,7 @@ class ApsimModel(APSIMNG):
             self.soil_tables["ch_comp"] = list(new_col)
             self.grouped = self.soil_tables.groupby('ch_comp')['prcent'].unique().apply(lambda x: x[0])
             self.component_percent_dict = self.grouped.to_dict()
-            for ss in self.soil_tables.componentname.unique():
+            for ss in self.soil_tables.component_name.unique():
                 self.dict_of_soils_tables[ss] = self.soil_tables[self.soil_tables['componentname'] == ss]
         return self
 
@@ -157,7 +146,7 @@ class ApsimModel(APSIMNG):
             lonlat (_tuple_): longitude and latitude of the target location
         """
         try:
-            soil_tables = DownloadsurgoSoiltables(self.lonlat)
+            soil_tables = download_surgo_soil_tables(self.lonlat)
             pr = soil_tables.prcent.unique()
 
             grouped = soil_tables.groupby('componentname')[
@@ -180,9 +169,9 @@ class ApsimModel(APSIMNG):
             self.soiltype = keys
             if verbose:
                 print("Padding variabales for:", keys)
-            self.soil_profile = OrganizeAPSIMsoil_profile(self.dict_of_soils_tables[keys],
-                                                          thickness_values=self.thickness_values,
-                                                          thickness=self.thickness)
+            self.soil_profile = APSIMSoilProfile(self.dict_of_soils_tables[keys],
+                                                 thickness_values=self.thickness_values,
+                                                 thickness=self.thickness)
             missing_properties = self.soil_profile.cal_missingFromSurgo()  # returns a list of physical, organic and cropdf each in a data frame
             physical_calculated = missing_properties[0]
             self.organic_calcualted = missing_properties[1]
@@ -286,8 +275,7 @@ class ApsimModel(APSIMNG):
                 cropLL.Thickness = self.thickness_replace
         return self
 
-    # print(self.results)
-    def relace_initial_carbon(self, values, simulation_names):
+    def replace_initial_carbon(self, values, simulation_names):
         """Replaces initial carbon content of the organic module
 
         Args:
@@ -320,44 +308,17 @@ class ApsimModel(APSIMNG):
         return self
 
     def run_edited_file(self, simulations=None, clean=False, multithread=True):
-        """Run simulations in this subclass if we want to clean the database, we need to
-         spawn the path with one process to avoid os access permission eros
-
+        """
+        Run simulations in this subclass if we want to clean the database, we need to
+        spawn the path with one process to avoid os access permission eros
 
         Parameters
         ----------
-        simulations, optional
-            List of simulation names to run, if `None` runs all simulations, by default `None`.
-        clean, optional
-            If `True` remove existing database for the file before running, by default `True`
-        multithread, optional
-            If `True` APSIM uses multiple threads, by default `True`
+        simulations:List of simulation names to run, if `None` runs all simulations, by default `None`.
+        clean: If `True` remove existing database for the file before running, by default `True`
+        multithread: If `True` APSIM uses multiple threads, by default `True`
         """
-        runa, runb = Models.Core.Run.Runner.RunTypeEnum.MultiThreaded, Models.Core.Run.Runner.RunTypeEnum.SingleThreaded
-        if multithread:
-            runspeed = runa
-        else:
-            runspeed = runb
-        self.results = None
-        if clean:
-            self._DataStore.Dispose()
-            pathlib.Path(self._DataStore.FileName).unlink(missing_ok=True)
-            self._DataStore.Open()
-        if simulations is None:
-            runmodel = Models.Core.Run.Runner(self.Model, True, False, False, None, runspeed)
-            data_run = runmodel.Run()
-        else:
-            sims = self.find_simulations(simulations)
-            # Runner needs C# list
-            cs_sims = List[Models.Core.Simulation]()
-            for s in sims:
-                cs_sims.Add(s)
-                runmodel = Models.Core.Run.Runner(cs_sims, True, False, False, None, runspeed)
-                data_run = runmodel.Run()
-
-        if (len(data_run) > 0):
-            print(data_run[0].ToString())
-        self.results = self._read_simulation()  # still wondering if this should be a static method
+        self.run(simulations=simulations, clean=clean, multithread=multithread)
         self._DataStore.Close()
         return self.results
 
@@ -419,9 +380,10 @@ if __name__ == '__main__':
 
     # Model = FileFormat.ReadFromFile[Models.Core.Simulations](model, None, False)
     os.chdir(Path.home())
-    from apsimNGpy.data.base_data import LoadExampleFiles
+    from .base_data import LoadExampleFiles
 
     al = LoadExampleFiles(Path.cwd())
     model = al.get_maize
     print(model)
     model = ApsimModel(model, read_from_string=True)
+

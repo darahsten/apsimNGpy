@@ -1,7 +1,10 @@
-import numpy as np
 import glob
+import itertools
 import os
+from concurrent.futures import ThreadPoolExecutor
 from os.path import join as opj
+import os.path as osp
+
 import shutil
 import random
 import string
@@ -9,22 +12,28 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 from shapely.geometry import Point
-from concurrent.futures import ThreadPoolExecutor
-from threading import Thread
 from scipy.optimize import curve_fit
 from time import perf_counter
+
 import pandas as pd
 
-class KeyValuePair:
-    def __init__(self, Key, Value):
-        self.key = Key
-        self.value = Value
+
+# decorator to monitor performance
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        start_time = perf_counter()
+        result = func(*args, **kwargs)
+        end_time = perf_counter()
+        elapsed_time = end_time - start_time
+        print(f"{func.__name__} took {elapsed_time:.4f} seconds to execute.")
+        return result
+
+    return wrapper
 
 
-def generate_unique_name(base_name, length=6):
-    random_suffix = ''.join(random.choices(string.ascii_lowercase, k=length))
-    unique_name = base_name + '_' + random_suffix
-    return unique_name
+def change_version(apsim_version):
+    if osp.exists(apsim_version) and apsim_version.endswith(".bin"):
+        return apsim_version
 
 
 def delete_simulation_files(path, patterns=None):
@@ -90,7 +99,8 @@ def make_apsimx_clones(base_file, number_of_clones):
 
     try:
         for i in range(number_of_clones):
-            file_path = opj(path, generate_unique_name(f"clones_{i}")) + ".apsimx"
+            random_id = "".join(random.choices(string.ascii_lowercase, k=6))
+            file_path = opj(path, f"clones_{i}_{random_id}") + ".apsimx"
             files.append(file_path)
             shutil.copy(base_file, file_path)
         # check if there is any file that is not apsim
@@ -252,15 +262,18 @@ def create_polygon(lat, lon, lon_step, lat_step):
 
 
 def create_fishnet(min_lat, min_lon, max_lat, max_lon, lon_step, lat_step):
+    """
+    TODO: Find out the purpose of this function.
+    """
     lats = np.arange(min_lat, max_lat, lat_step)
     lons = np.arange(min_lon, max_lon, lon_step)
 
     polygons = []
+
     with ThreadPoolExecutor(max_workers=18) as executor:  # Adjust max_workers as needed
         x = 0
         for lon in lons:
             x += 1
-            print(x)
             for lat in lats:
                 print(x)
                 future = executor.submit(create_polygon, lat, lon, lon_step, lat_step)
@@ -306,8 +319,6 @@ def convert_geopoint_to_array(geoseries):
     return coords_array
 
 
-from scipy.spatial.distance import cdist
-import math
 import numpy as np
 import math
 
@@ -318,25 +329,26 @@ def split_arr(ar, chunk_size):
     return np.vsplit(ar, indices)
 
 
-def moving_average(iterable, n=3):
-    # moving_average([40, 30, 50, 46, 39, 44]) --> 40.0 42.0 45.0 43.0
-    # https://en.wikipedia.org/wiki/Moving_average
-    it = iter(iterable)
-    d = deque(itertools.islice(it, n - 1))
-    d.appendleft(0)
-    s = sum(d)
-    for elem in it:
-        s += elem - d.popleft()
-        d.append(elem)
-        yield s / n
+# def moving_average(iterable, n=3):
+#     # moving_average([40, 30, 50, 46, 39, 44]) --> 40.0 42.0 45.0 43.0
+#     # https://en.wikipedia.org/wiki/Moving_average
+#     it = iter(iterable)
+#     d = deque(itertools.islice(it, n - 1))
+#     d.appendleft(0)
+#     s = sum(d)
+#     for elem in it:
+#         s += elem - d.popleft()
+#         d.append(elem)
+#         yield s / n
 
 
 def Cache(func):
     """
-
     This is a function decorator for class attributes. It just remembers the result of the FIRST function call
-    and returns this from there on. Other cashes like LRU are difficult to use because the input can be unhashable
+    and returns this from there on. Other cashes like LRU are difficult to use because the input can be un hashable
     or bigger numpy arrays. Thus the user has to choose how to use this cache.
+
+    We have to resolve this work easily. We are in the best position to work out this math.
     """
 
     func_name = func.__name__
@@ -391,36 +403,36 @@ def assign_management_practices(locations, object_ids, num_practices):
     return watershed_data
 
 
-def idex_excutor(self, x):  # We supply x from the rotations idex which inherits objectid
-    try:
-        a = time.perf_counter()
-        print(f"downloading for: {x}")
-        data_dic = {}
-        fn = "daymet_wf_" + str(x) + '.met'
-        cod = pol_object.record_array["Shape"][x]
+# def idex_executor(x):  # We supply x from the rotations idex which inherits objectid
+#     try:
+#         a = perf_counter()
+#         print(f"downloading for: {x}")
+#         data_dic = {}
+#         fn = "daymet_wf_" + str(x) + '.met'
+#         cod = pol_object.record_array["Shape"][x]
+#
+#         filex = weather.daymet_bylocation_nocsv(cod, start=1998, end=2020, cleanup=False, filename=fn)
+#         return filex
+#     except Exception as e:
+#         # raise
+#         print(e, "has occured")
+#         try:
+#             print("trying again")
+#             filex = weather.daymet_bylocation_nocsv(cod, start=1998, end=2000, cleanup=True, filename=fn)
+#             return filex
+#         except:
+#             print("unresolved errors at the momentt try again")
 
-        filex = weather.daymet_bylocation_nocsv(cod, start=1998, end=2020, cleanup=False, filename=fn)
-        return filex
-    except Exception as e:
-        # raise
-        print(e, "has occured")
-        try:
-            print("trying again")
-            filex = weather.daymet_bylocation_nocsv(cod, start=1998, end=2000, cleanup=True, filename=fn)
-            return filex
-        except:
-            print("unresolved errors at the momentt try again")
 
-
-def threaded_weather_download(self, iter_arable):
-    threads = []
-    for idices in iter_arable:
-        thread = Thread(target=self.idex_excutor, args=(idices,))
-        threads.append(thread)
-        thread.start()
-    # Wait for all threads to finish
-    for thread in threads:
-        thread.join()
+# def threaded_weather_download(self, iter_arable):
+#     threads = []
+#     for idices in iter_arable:
+#         thread = Thread(target=self.idex_executor, args=(idices,))
+#         threads.append(thread)
+#         thread.start()
+#     # Wait for all threads to finish
+#     for thread in threads:
+#         thread.join()
 
 
 # # Example usage:
@@ -482,15 +494,16 @@ def optimize_exponetial_data(x_data, y_data, initial_guess=[0.5, 0.5],
     return predicted
 
 
-def area_of_circle(r):
-    pi = 3.141592653589793
-    return pi * r * r
+# def area_of_circle(r):
+#     pi = 3.141592653589793, Use math.PI instead of hard coding PI unless you are looking to reduced
+#     precision.
+#     return pi * r * r
 
 
-def number_of_cells(r, cell_size):
-    circle_area = area_of_circle(r)
-    cell_area = cell_size * cell_size
-    return int(circle_area / cell_area)
+# def number_of_cells(r, cell_size):
+#     circle_area = area_of_circle(r)
+#     cell_area = cell_size * cell_size
+#     return int(math.PI * r * r / cell_area)
 
 
 def timer(func):
@@ -503,6 +516,8 @@ def timer(func):
         return result
 
     return wrapper
+
+
 def filter_df(df, **kwargs):
     """
     Filter a DataFrame based on values in specified columns.

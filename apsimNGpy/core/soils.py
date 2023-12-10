@@ -1,38 +1,34 @@
-import json, os, sys
-from os.path import join as opj
+
 import numpy as np
 import numpy
 import requests
 import xmltodict
 import pandas as pd
-import time
-from numpy import array as npar
-import sys
+import logging
+from numpy import array as npar  # Abbreviations like this should be declared close where they are used.
 from scipy import interpolate
-import traceback
-from datetime import datetime
-import datetime
-import copy
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 
+logger = logging.getLogger(__name__)
 THICKNESS = [150, 150, 200, 200, 200, 250, 300, 300, 400, 500]
 
 
-def DownloadsurgoSoiltables(lonlat, select_componentname=None, summarytable=False):
-    '''
-    TODO this is a duplicate File. Duplicate of soils/soilmanager
-    Downloads SSURGO soil tables
+def download_surgo_soil_tables(lonlat, select_component_name=None, summary_table=False):
+    """
+    Downloads SURGO soil tables
     
-    parameters
+    Args
     ------------------
-    lon: longitude 
-    lat: latitude
-    select_componentname: any componet name within the map unit e.g 'Clarion'. the default is None that mean sa ll the soil componets intersecting a given locationw il be returned
-      if specified only that soil component table will be returned. in case it is not found the dominant componet will be returned with a caveat meassage.
-        use select_componentname = 'domtcp' to return the dorminant component
-    summarytable: prints the component names, their percentages
-    '''
+    lonlat: gps_coordinates
+
+    select_component_name: any component name within the map unit e.g 'Clarion'. the default is None that means all the
+    soil components intersecting a given location will be returned
+      if specified only that soil component table will be returned. in case it is not found the dominant component will
+      be returned with a caveat meassage.
+        use select_component_name = 'domtcp' to return the dominant component
+    summary_table: prints the component names, their percentages
+    """
 
     total_steps = 3
     # lat = "37.54189"
@@ -75,27 +71,29 @@ def DownloadsurgoSoiltables(lonlat, select_componentname=None, summarytable=Fals
     soil_df = pd.DataFrame.from_dict(
         my_dict['soap:Envelope']['soap:Body']['RunQueryResponse']['RunQueryResult']['diffgr:diffgram']['NewDataSet'][
             'Table'])
-    if summarytable:
+    if summary_table:
         df = soil_df.drop_duplicates(subset=['componentname'])
-        summarytable = df[["componentname", 'prcent', 'chkey']]
+        summary_table = df[["componentname", 'prcent', 'chkey']]
+        # print statements should not appear in production code.
         print("summary of the returned soil tables \n")
-        print(summarytable)
-    # selec the dominat componet
-    dom_component = soil_df[soil_df.prcent == soil_df.prcent.max()]
-    # select by component name
-    if select_componentname in soil_df.componentname.unique():
-        componentdf = soil_df[soil_df.componentname == select_componentname]
-        return componentdf
-    elif select_componentname == 'domtcp':
-        return dom_component
-        # print("the following{0} soil components were found". format(list(soil_df.componentname.unique())))
-    elif select_componentname == None:
-        # print("the following{0} soil components were found". format(list(soil_df.componentname.unique())))
+        print(summary_table)
+
+    # selected the dominant component
+    if select_component_name is None:  # this eliminates a none situation already no need to check down.
         return soil_df
-    elif select_componentname != 'domtcp' and select_componentname not in soil_df.componentname.unique() or select_componentname != None:
-        print(
-            f'Ooops! we realised that your component request: {select_componentname} does not exists at the specified location. We have returned the dorminant component name')
+
+    dom_component = soil_df[soil_df.prcent == soil_df.prcent.max()]
+    if select_component_name == 'domtcp':
         return dom_component
+    else:  # select component_name is something but is not domtcp
+        if select_component_name in soil_df.componentname.unique():
+            component_df = soil_df[soil_df.componentname == select_component_name]
+            return component_df
+        else:  # select component name is not unique, is not equal to domtcpt and is not None:
+            logger.info(
+                f'Ooops! we realised that your component request: {select_component_name} '
+                f'does not exists at the specified location. We have returned the dorminant component name')
+            return dom_component
 
 
 # test the function
@@ -127,7 +125,7 @@ def soilvar_perdep_cor(nlayers, soil_bottom=200, a=0.5, b=0.5):  # has potential
         return ans
 
 
-def set_depth(depththickness):
+def calc_depth(depth_thickness):
     """
   parameters
   depththickness (array):  an array specifying the thicknness for each layer
@@ -137,77 +135,84 @@ def set_depth(depththickness):
 bottom depth and top depth in a turple
   """
     # thickness  = np.tile(thickness, 10
-    thickness_array = np.array(depththickness)
-    bottomdepth = np.cumsum(thickness_array)  # bottom depth should nothave zero
-    top_depth = bottomdepth - thickness_array
-    return bottomdepth, top_depth
+    thickness_array = np.array(depth_thickness)
+    bottom_depth = np.cumsum(thickness_array)  # bottom depth should nothave zero
+    top_depth = bottom_depth - thickness_array
+    return bottom_depth, top_depth
 
 
-distparms = {'a': 0, 'b': 0.2}
+class APSIMSoilProfile:
+    """
+    Organizes and processes soil data.
+    Soil Profile is defined by:
+    clay: float denoting the percentage of clay in the soil
+    sand: float denoting the fraction of sand in the soil
+    silt: float denoting the fraction of silt in the soil
+    OM: ??
+    top_depth: ??
+    bottom_depth: ?? mirrors surgodf.top
 
+    """
 
-class OrganizeAPSIMsoil_profile:
-    # Iinitiate the soil object and covert all into numpy array and change them to floating values
-    def __init__(self, sdf, thickness, thickness_values=None, bottomdepth=200):
+    def __init__(self, sdf, thickness, thickness_values=None, bottom_depth=200):
         """_summary_
 
         Args:
             sdf (pandas data frame): soil table downloaded from SSURGO_
             thickness double: _the thickness of the soil depth e.g 20cm_
-            bottomdepth (int, optional): _description_. Defaults to 200.
+            bottom_depth (int, optional): _description_. Defaults to 200.
             thickness_values (list or None) optional if provided extrapolation will be based on those vlue and should be the same length as the existing profile depth
          """
         sdf1 = sdf.drop_duplicates(subset=["topdepth"])
-        surgodf = sdf1.sort_values('topdepth', ascending=True)
+        surgodf = sdf1.sort_values("topdepth", ascending=True)
         self.clay = npar(surgodf.clay).astype(np.float16)
         self.sand = npar(surgodf.sand).astype(np.float16)
         self.silt = npar(surgodf.silt).astype(np.float16)
         self.OM = npar(surgodf.OM).astype(np.float16)
-        self.topdepth = npar(surgodf.topdepth).astype(np.float16)
-        self.bottomdepth = npar(surgodf.bottomdepth).astype(np.float16)
+        self.top_depth = npar(surgodf.top_depth).astype(np.float16)
+        self.bottom_depth = npar(surgodf.bottomdepth).astype(np.float16)
         self.BD = npar(surgodf.bb).astype(np.float16)
         self.DUL = npar(surgodf.DUL).astype(np.float64)
         self.L15 = npar(surgodf.L15).astype(np.float64)
         self.PH = npar(surgodf.pH).astype(np.float64)
         self.PAW = npar(surgodf.PAW).astype(np.float16)
-        self.saturatedhudraulic_conductivity = npar(surgodf.sat_hidric_cond).astype(np.float16)
+        self.saturated_hydraulic_conductivity = npar(surgodf.sat_hidric_cond).astype(np.float16)
         self.KSAT = npar(surgodf.KSAT).astype(np.float16)
-        self.particledensity = npar(surgodf.pd).astype(np.float16)
+        self.particle_density = npar(surgodf.pd).astype(np.float16)
         self.muname = surgodf.muname
         self.musymbol = surgodf.musymbol
         self.cokey = surgodf.cokey
         self.slope = surgodf.slope_r
-        self.componentname = surgodf.componentname
-        self.Nlayers = bottomdepth / thickness
+        self.component_name = surgodf.component_name
+        self.Nlayers = bottom_depth / thickness
         self.thickness = thickness * 10
         self.wat_r = surgodf.wat_r
         self.chkey = surgodf.chkey
         self.componentpercent = surgodf.prcent
-        self.newtopdepth = np.arange(0, bottomdepth, thickness)
-        self.newbottomdepth = np.arange(thickness, bottomdepth + thickness, thickness)
+        self.newtopdepth = np.arange(0, bottom_depth, thickness)
+        self.newbottomdepth = np.arange(thickness, bottom_depth + thickness, thickness)
         # trial
         self.thickness_values = np.array(thickness_values)
 
     # create a function that creates a variable profile of the provide variables
     @staticmethod
-    def set_depth(depththickness):
+    def calc_depth_thickness(depth_thickness):
         """
         parameters
-        depththickness (array):  an array specifying the thicknness for each layer
+        depth_thickness (array):  an array specifying the thicknness for each layer
         nlayers (int); number of layers just to remind you that you have to consider them
         ------
-        return
-      bottom depth and top depth in a turple
+        return: bottom depth and top depth in a tuple
         """
         # thickness  = np.tile(thickness, 10
-        thickness_array = np.array(depththickness)
-        bottomdepth = np.cumsum(thickness_array)  # bottom depth should nothave zero
-        top_depth = bottomdepth - thickness_array
-        return bottomdepth, top_depth
+        thickness_array = np.array(depth_thickness)
+        bottom_depth = np.cumsum(thickness_array)  # bottom depth should nothave zero
+        top_depth = bottom_depth - thickness_array
+        return bottom_depth, top_depth
 
     def variable_profile(self, y, kind='linear'):  # has potential to cythonize
         # use the lower depth boundary because divinding by zeros is nearly impossible
-        x = self.bottomdepth
+        x = self.bottom_depth
         # replace x with the anticipated value of the the new soil depth
         nlayers = self.Nlayers
         xranges = x.max() - x.min()
@@ -219,11 +224,12 @@ class OrganizeAPSIMsoil_profile:
         if isinstance(self.thickness_values, str):  # just put a strign to evaluate to false i will fix it later
             tv = np.array(self.thickness_values)
             tv = tv.astype('float64')
-            xnew, top_dep = OrganizeAPSIMsoil_profile.set_depth(tv)
+            xnew, top_dep = APSIMSoilProfile.calc_depth_thickness(tv)
         apsimvar = yinterpo(xnew)
         return apsimvar
 
-    def decreasing_exponential_function(self, x, a, b):  # has potential to cythonize
+    @staticmethod
+    def decreasing_exponential_function(x, a, b):  # has potential to cythonize
         """
           Compute the decreasing exponential function y = a * e^(-b * x).
 
@@ -234,12 +240,13 @@ class OrganizeAPSIMsoil_profile:
 
           Returns:
               numpy.ndarray: The computed decreasing exponential values.
+            TODO: You have to justify why you have this function, at least in the comments.
           """
         func = a * np.exp(-b * x)
         return func
 
-    def optimize_exponetial_data(self, x_data, y_data, initial_guess=[0.5, 0.5],
-                                 bounds=([0.1, 0.01], [np.inf, np.inf])):  # defaults for carbon
+    def optimize_exponential_data(self, x_data, y_data, initial_guess=[0.5, 0.5],
+                                  bounds=([0.1, 0.01], [np.inf, np.inf])):  # defaults for carbon
 
         best_fit_params, _ = curve_fit(self.decreasing_exponential_function, x_data, y_data, p0=initial_guess,
                                        bounds=bounds)
@@ -248,14 +255,14 @@ class OrganizeAPSIMsoil_profile:
         return predicted
 
     def cal_satfromBD(self):  # has potential to cythonize
-        if any(elem is None for elem in self.particledensity):
+        if any(elem is None for elem in self.particle_density):
             pd = 2.65
             bd = npar(self.BD)
             sat = ((2.65 - bd) / 2.65) - 0.02
             sat = self.variable_profile(sat)
             return sat
         else:
-            pd = self.particledensity
+            pd = self.particle_density
             bd = npar(self.BD)
             sat = ((2.65 - bd) / pd) - 0.02
             sat = self.variable_profile(sat)
@@ -283,17 +290,17 @@ class OrganizeAPSIMsoil_profile:
         return l151
 
     def calculateSATfromwat_r(self):  # has potential to cythonize
-        if all(elem is None for elem in npar(self.particledensity)) == False:
+        if all(elem is None for elem in npar(self.particle_density)):
             wat = self.wat_r
             return self.variable_profile(wat)
 
     def cal_KS(self):  # has potential to cythonize
-        ks = self.saturatedhudraulic_conductivity * npar([1e-06]) * (60 * 60 * 24) * 1000
+        ks = self.saturated_hydraulic_conductivity * npar([1e-06]) * (60 * 60 * 24) * 1000
         n = int(self.Nlayers)
         KS = np.full(shape=n, fill_value=ks[1], dtype=np.float64)
         return KS
 
-    def cal_Carbon(self):  # has potential to cythonize
+    def cal_carbon(self):  # has potential to cythonize
         ## Brady and Weil (2016)
         carbonn = self.variable_profile(self.OM) / 1.72
         # if carbonans >=3.5:
@@ -304,11 +311,11 @@ class OrganizeAPSIMsoil_profile:
 
         xdata = self.newbottomdepth
         try:
-            predicted = self.optimize_exponetial_data(xdata, carbonn)
+            predicted = self.optimize_exponential_data(xdata, carbonn)
 
             return predicted
         except Exception as e:
-            print("error occured while optimizing soil carbon to the new depth \nplease see:", repr(e))
+            logger.exception("Error occurred while optimizing soil carbon to the new depth \nplease see:", repr(e))
             return carbonn
 
     def interpolate_clay(self):
@@ -363,14 +370,14 @@ class OrganizeAPSIMsoil_profile:
     def getBD(self):
         return self.variable_profile(self.BD)
 
-    def create_soilprofile(self):
+    def create_soil_profile(self):
         n = int(self.Nlayers)
         Depth = []
         for i in range(len(self.newbottomdepth)):
             Depth.append(str(self.newtopdepth[i]) + "-" + str(self.newbottomdepth[i]))
         Depth = Depth
         # Thickness  = [self.thickness]*self.Nlayers
-        Carbon = self.cal_Carbon()
+        Carbon = self.cal_carbon()
         AirDry = self.get_AirDry()
         L15 = self.get_L15()
         DUL = self.get_DUL()
@@ -406,7 +413,7 @@ class OrganizeAPSIMsoil_profile:
              "SAT": SAT, "KS": KS, "Carbon": Carbon,
              "PH": PH, "ParticleSizeClay": ParticleSizeClay, "ParticleSizeSilt": ParticleSizeSilt,
              "ParticleSizeSand": ParticleSizeSand})
-        return (df)
+        return df
 
     def exponential_function_inc_yvalue(x, a, b):
         return a * np.exp(-b * x)
@@ -470,7 +477,7 @@ class OrganizeAPSIMsoil_profile:
         FBiom[0] = 0.0395
         FBiom[1] = 0.035
         # from above
-        Carbon = self.cal_Carbon()
+        Carbon = self.cal_carbon()
         PH = self.interpolate_PH()
         # vn = npar
         # PH = 6.5 * soilvar_perdep_cor(nlayers, a = curveparam_a, b = 0)
@@ -487,7 +494,7 @@ class OrganizeAPSIMsoil_profile:
         # print(cropframe)
         # pd.concat is faster
         cropdf = pd.concat(cropframe, join='outer', axis=1)
-        physical = self.create_soilprofile()
+        physical = self.create_soil_profile()
 
         # create a alist
         frame = [physical, organic, cropdf, metadata]

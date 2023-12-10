@@ -1,5 +1,4 @@
 import os
-from os.path import join as opj
 from datetime import datetime
 import datetime
 import requests
@@ -13,28 +12,24 @@ import string
 from io import StringIO
 import io
 
-
-def generate_unique_name(base_name, length=6):
-    # TODO this function is duplicated everywhere.
-    random_suffix = ''.join(random.choices(string.ascii_lowercase, k=length))
-    unique_name = base_name + '_' + random_suffix
-    return unique_name
+from config.constants import EARLY_START_YEAR, END_YEAR
+from utils.requests import download_data
 
 
-# from US_states_abbreviation import getabreviation
-def get_iem_bystation(dates, station, path, mettag):
-    '''
-      Dates is a tupple/list of strings with date ranges
-      
+def get_iem_by_station(dates, station, path, met_tag):
+    """
+      Dates is a tuple/list of strings with date ranges
       an example date string should look like this: dates = ["01-01-2012","12-31-2012"]
-      
+
       if station is given data will be downloaded directly from the station the default is false.
-      
-      mettag: your prefered tag to save on filee
-      '''
-    # access the elements in the metdate class above
+      dates: Dates for which data will be obtained
+      station:
+      path:
+      met_tag: your preferred tag to save on file
+      """
+    # access the elements in the met date class above
     wdates = _MetDate(dates)
-    stationx = station[:2]
+    stationx = station[:2]  # what is stationx.
     state_clim = stationx + "CLIMATE"
     str0 = "http://mesonet.agron.iastate.edu/cgi-bin/request/coop.py?network="
     str1 = str0 + state_clim + "&stations=" + station
@@ -43,7 +38,7 @@ def get_iem_bystation(dates, station, path, mettag):
     url = str3
     rep = requests.get(url)
     if rep.ok:
-        metname = station + mettag + ".met"
+        metname = station + met_tag + ".met"
         os.chdir(path)
         if not os.path.exists('weatherdata'):
             os.mkdir('weatherdata')
@@ -76,129 +71,57 @@ class _MetDate:
 
 dates = ['01-01-2000', '12-31-2020']
 
-states = {
-    'AK': 'Alaska',
-    'AL': 'Alabama',
-    'AR': 'Arkansas',
-    'AZ': 'Arizona',
-    'CA': 'California',
-    'CO': 'Colorado',
-    'CT': 'Connecticut',
-    'DC': 'District of Columbia',
-    'DE': 'Delaware',
-    'FL': 'Florida',
-    'GA': 'Georgia',
-    'HI': 'Hawaii',
-    'IA': 'Iowa',
-    'ID': 'Idaho',
-    'IL': 'Illinois',
-    'IN': 'Indiana',
-    'KS': 'Kansas',
-    'KY': 'Kentucky',
-    'LA': 'Louisiana',
-    'MA': 'Massachusetts',
-    'MD': 'Maryland',
-    'ME': 'Maine',
-    'MI': 'Michigan',
-    'MN': 'Minnesota',
-    'MO': 'Missouri',
-    'MS': 'Mississippi',
-    'MT': 'Montana',
-    'NC': 'North Carolina',
-    'ND': 'North Dakota',
-    'NE': 'Nebraska',
-    'NH': 'New Hampshire',
-    'NJ': 'New Jersey',
-    'NM': 'New Mexico',
-    'NV': 'Nevada',
-    'NY': 'New York',
-    'OH': 'Ohio',
-    'OK': 'Oklahoma',
-    'OR': 'Oregon',
-    'PA': 'Pennsylvania',
-    'RI': 'Rhode Island',
-    'SC': 'South Carolina',
-    'SD': 'South Dakota',
-    'TN': 'Tennessee',
-    'TX': 'Texas',
-    'UT': 'Utah',
-    'VA': 'Virginia',
-    'VT': 'Vermont',
-    'WA': 'Washington',
-    'WI': 'Wisconsin',
-    'WV': 'West Virginia',
-    'WY': 'Wyoming'
-}
 
-# flip the keys
-new_dict = {}
-for k, v in states.items():
-    new_dict[v] = k
+def date_range(start, end):
+    """
+    start: the starting year to download the weather data
+    end: the year under which download should stop
+    returns data range between start and end with intervals of one month
+    """
+    start_dates = '01-01'
+    end_dates = '12-31'
+    end = str(end) + "-" + end_dates
+    start = str(start) + "-" + start_dates
+    d_range = pd.date_range(start, end)
+    return d_range
 
 
-def getabreviation(x):
-    return new_dict[x]
+def get_nasa_rad(lonlat, start, end):
+    """
+    # download radiation data for replacement
+    Args:
+        lonlat: The GPS coordinates of the location
+        start: Start Date
+        end: End Date
+    returns: The radiation btn start date and end dates
 
-
-
-# function to define the date ranges
-def daterange(start, end):
-    '''
-  start: the starting year to download the weather data
-  -----------------
-  end: the year under which download should stop
-  '''
-    startdates = '01-01'
-    enddates = '12-31'
-    end = str(end) + "-" + enddates
-    start = str(start) + "-" + startdates
-    drange = pd.date_range(start, end)
-    return (drange)
-
-
-# check if a year is aleap year
-def isleapyear(year):
-    if (year % 400 == 0) and (year % 100 == 0) or (year % 4 == 0) and (year % 100 != 0):
-        return (True)
-    else:
-        return (False)
-
-
-# download radiation data for replacement
-def get_nasarad(lonlat, start, end):
+    """
     lon = lonlat[0]
     lat = lonlat[1]
     pars = "ALLSKY_SFC_SW_DWN"
-    rm = f'https://power.larc.nasa.gov/api/temporal/daily/point?start={start}0101&end={end}1231&latitude={lat}&longitude={lon}&community=ag&parameters={pars}&format=json&user=richard&header=true&time-standard=lst'
-    data = requests.get(rm)
-    dt = json.loads(data.content)
-    df = pd.DataFrame(dt["properties"]['parameter'])
-    if len(df) == len(daterange(start, end)):
-        return df
+    url = f'https://power.larc.nasa.gov/api/temporal/daily/point?start={start}0101&end={end}1231&latitude={lat}&longitude={lon}&community=ag&parameters={pars}&format=json&user=richard&header=true&time-standard=lst'
+    response = download_data(url)
+    if response:
+        dt = json.loads(response.content)
+        df = pd.DataFrame(dt["properties"]['parameter'])
+        if len(df) == len(date_range(start, end)):
+            return df
 
-    # fucntion to download data from daymet
 
-
-def daymet_bylocation(lonlat, start, end, cleanup=True, filename=None):
-    '''collect weather from daymet solar radiation is replaced with that of nasapower
+def day_met_by_location(lonlat, start, end, clean_up=True, file_name=None):
+    """collect weather from daymet solar radiation is replaced with that of nasapower
    ------------
    parameters
    ---------------
    start: Starting year
-   
    end: Ending year
-   
    lonlat: A tuple of xy cordnates
-   
-   Cleanup:  A bolean True or False default is true: deletes the excel file generated during the file write up
-   
+   clean_up:  A boolean True or False default is true: deletes the excel file generated during the file write up
+   file_name: The file ...
    ------------
    returns complete path to the new met file but also write the met file to the disk in the working directory
-   '''
-    # import pdb
-    # pdb.set_trace()
-
-    datecheck = daterange(start, end)
+   """
+    datecheck = date_range(start, end)
     if start < 1980 or end > 2021:
         print(
             "requested year preceeds valid data range! \n end years should not exceed 2021 and start year should not be less than 1980")
@@ -271,7 +194,7 @@ def daymet_bylocation(lonlat, start, end, cleanup=True, filename=None):
             newmet = pd.concat(frames)
             newmet.index = range(0, len(newmet))
             # repalce radn data
-            rad = get_nasarad(lonlat, start, end)
+            rad = get_nasa_rad(lonlat, start, end)
             newmet["radn"] = rad.ALLSKY_SFC_SW_DWN.values
             if len(newmet) != len(datecheck):
                 print('date discontinuities still exisists')
@@ -284,14 +207,14 @@ def daymet_bylocation(lonlat, start, end, cleanup=True, filename=None):
                 AMP = round(mean_maxt - mean_mint, 2)
                 tav = round(statistics.mean((mean_maxt, mean_mint)), 2)
                 tile = conn.headers["Content-Disposition"].split("=")[1].split("_")[0]
-                fn = conn.headers["Content-Disposition"].split("=")[1].replace("csv", 'met')
+                filename = conn.headers["Content-Disposition"].split("=")[1].replace("csv", 'met')
                 if not filename:
-                    shortenfn = generate_unique_name("Daymet") + '.met'
+                    shorten_fn = f"Daymet_{''.join(random.choices(string.ascii_lowercase, k=6))}.met"
                 else:
-                    shortenfn = filename
+                    shorten_fn = filename
                 if not os.path.exists('weatherdata'):
                     os.makedirs('weatherdata')
-                fn = shortenfn
+                fn = shorten_fn
                 fname = os.path.join('weatherdata', fn)
                 headers = ['year', 'day', 'radn', 'maxt', 'mint', 'rain', 'vp', 'swe']
                 header_string = " ".join(headers) + "\n"
@@ -318,28 +241,23 @@ def daymet_bylocation(lonlat, start, end, cleanup=True, filename=None):
                 return fname  # fname
 
 
-def daymet_bylocation_nocsv(lonlat, start, end, cleanup=True, filename='daymet'):
+def day_met_by_location_nocsv(lonlat, start, end, clean_up=True, file_name='daymet'):
     """
     collect weather from daymet. doesnt store data to csv
      solar radiation is replaced with that of nasapower
-    ------------
-    parameters
-    ---------------
+    Args:
     start: Starting year
-
     end: Ending year
-
     lonlat: A tuple of xy cordnates
-
-    Cleanup:  A bolean True or False default is true: deletes the excel file generated during the file write up
-
+    clean_up:  A boolean True or False default is true: deletes the excel file generated during the file write up
+    file_name: ....
     ------------
     returns complete path to the new met file but also write the met file to the disk in the working directory
     """
     # import pdb
     # pdb.set_trace()
 
-    datecheck = daterange(start, end)
+    datecheck = date_range(start, end)
     if start < 1980 or end > 2021:
         print(
             "requested year preceeds valid data range! \n end years should not exceed 2021 and start year should not "
@@ -364,7 +282,7 @@ def daymet_bylocation_nocsv(lonlat, start, end, cleanup=True, filename='daymet')
         elif conn.ok:
             # print("connection established to download the following data", url)
             # outFname = conn.headers["Content-Disposition"].split("=")[-1]
-            outFname = "w" + filename + conn.headers["Content-Disposition"].split("=")[-1]
+            outFname = "w" + file_name + conn.headers["Content-Disposition"].split("=")[-1]
             text_str = conn.content
             conn.close()
             #  read the downloaded data to a data frame
@@ -414,7 +332,7 @@ def daymet_bylocation_nocsv(lonlat, start, end, cleanup=True, filename='daymet')
             newmet = pd.concat(frames)
             newmet.index = range(0, len(newmet))
             # repalce radn data
-            rad = get_nasarad(lonlat, start, end)
+            rad = get_nasa_rad(lonlat, start, end)
             newmet["radn"] = rad.ALLSKY_SFC_SW_DWN.values
             if len(newmet) != len(datecheck):
                 print('date discontinuities still exisists')
@@ -428,13 +346,13 @@ def daymet_bylocation_nocsv(lonlat, start, end, cleanup=True, filename='daymet')
                 tav = round(statistics.mean((mean_maxt, mean_mint)), 2)
                 tile = conn.headers["Content-Disposition"].split("=")[1].split("_")[0]
                 fn = conn.headers["Content-Disposition"].split("=")[1].replace("csv", 'met')
-                if not filename:
-                    shortenfn = generate_unique_name("Daymet") + '.met'
+                if not file_name:
+                    shorten_fn = f"Daymet_{''.join(random.choices(string.ascii_lowercase, k=6))}.met"
                 else:
-                    shortenfn = filename
+                    shorten_fn = file_name
                 if not os.path.exists('weatherdata'):
                     os.makedirs('weatherdata')
-                fn = shortenfn
+                fn = shorten_fn
                 fname = os.path.join('weatherdata', fn)
                 headers = ['year', 'day', 'radn', 'maxt', 'mint', 'rain', 'vp', 'swe']
                 header_string = " ".join(headers) + "\n"
@@ -455,7 +373,7 @@ def daymet_bylocation_nocsv(lonlat, start, end, cleanup=True, filename='daymet')
 
                     f2app.writelines(data_rows)
 
-                if cleanup:
+                if clean_up:
                     if os.path.isfile(os.path.join(os.getcwd(), outFname)):
                         os.remove(os.path.join(os.getcwd(), outFname))
                 return fname  # fname
